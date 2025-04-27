@@ -12,6 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from alpaca_grasp import train
 from evaluate_grasp import evaluate_model
 from dataset.loader import get_calibration_dataloader
+from tools.layer_compensation import compensate_and_remove_layers
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,9 @@ def main(
     recovery: Optional[bool] = True,
     log_file: Optional[str] = None,
     train_device: Optional[str] = None,
+    use_svd_compensation: Optional[bool] = False,
+    compensation_direction: Literal["up", "down", "both"] = "both",
+    compensation_ratio: float = 0.5,
     *args, **kwargs
 ):
     # Setup logger
@@ -76,6 +80,56 @@ def main(
     logger.info("=======> Start Compressing model with GRASP")
     if threshold_ratio is not None:
         logger.info("=======> Adaptive rank selection by taylor threshold %s", threshold_ratio)
+        
+    # 如果启用了SVD补偿，先进行层补偿
+    if use_svd_compensation:
+        logger.info("=======> 开始进行SVD层补偿")
+        grasp_model.model, removed_layers = compensate_and_remove_layers(
+            model=grasp_model.model,
+            layers_to_prune=layers_id,
+            compensation_direction=compensation_direction,
+            compensation_ratio=compensation_ratio,
+            device=device,
+            log_file=log_file
+        )
+        # 更新要处理的层ID（排除已移除的层）
+        if removed_layers:
+            logger.info(f"=======> 已移除层: {removed_layers}")
+            # 过滤掉已移除的层
+            layers_id = [layer_id for layer_id in layers_id if layer_id not in removed_layers]
+            if not layers_id or args.skip_grasp_after_compensation:
+                if not layers_id:
+                    logger.info("=======> 所有指定层已被移除，跳过GRASP压缩")
+                else:
+                    logger.info("=======> 根据用户设置，在SVD补偿后跳过GRASP压缩")
+                
+                # 直接保存模型，不进行后续GRASP压缩
+                logger.info("=======> 直接保存补偿后的模型")
+                if save_path:
+                    torch.save(grasp_model, save_path)
+                else:
+                    if not os.path.exists("./checkpoint"):
+                        os.makedirs("./checkpoint", exist_ok=True)
+                    model_id: str = grasp_model.model.config._name_or_path
+                    save_path = os.path.join("./checkpoint", f"{model_id.replace('/', '-')}_svd_compensated.pth")
+                    torch.save(grasp_model, save_path)
+                
+                # 如果需要恢复训练
+                if recovery:
+                    logger.info("=======> 开始对补偿后的模型进行恢复训练")
+                    grasp_model = train(
+                        grasp_model=grasp_model,
+                        tokenizer=tokenizer,
+                        output_dir=os.path.dirname(save_path),
+                        log_file=log_file,
+                        train_device=train_device,
+                        **kwargs
+                    )
+                    # 保存恢复训练后的模型
+                    torch.save(grasp_model, save_path.replace(".pth", "_recovered.pth"))
+                
+                return grasp_model
+    
     for layer_id in tqdm(layers_id, desc="GRASP Compressing", total=len(layers_id), leave=True):
         # MLP Block
         skip_flag = grasp_model.compress_block(
@@ -203,6 +257,16 @@ def parse_args():
     parser.add_argument("--log_file", type=str, default=None,
                       help="Path to log file for saving program output")
     
+    # 添加层补偿相关参数
+    parser.add_argument("--use_svd_compensation", action="store_true",
+                      help="使用SVD层补偿技术")
+    parser.add_argument("--compensation_direction", type=str, choices=["up", "down", "both"], default="both",
+                      help="补偿方向: up(上层), down(下层), both(两者)")
+    parser.add_argument("--compensation_ratio", type=float, default=0.5,
+                      help="补偿比例，控制有多少信息被补偿")
+    parser.add_argument("--skip_grasp_after_compensation", action="store_true",
+                      help="在SVD补偿后跳过GRASP压缩，直接保存模型")
+    
     # Training arguments for recovery
     parser.add_argument("--data_path", type=str, default='yahma/alpaca-cleaned',
                       help="Path to training data")
@@ -298,6 +362,9 @@ if __name__ == "__main__":
         recovery=args.recovery,
         log_file=args.log_file,
         train_device=args.train_device,
+        use_svd_compensation=args.use_svd_compensation,
+        compensation_direction=args.compensation_direction,
+        compensation_ratio=args.compensation_ratio,
         **kwargs
     )
 
