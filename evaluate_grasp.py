@@ -156,7 +156,8 @@ def evaluate_model(
     results = {}
     if eval_ppl:
         for dataset in eval_ppl.split(","):
-            cache_testloader = f"/tmp/{dataset}_testloader_{model_name.replace('/', '_')}_all.cache"
+            logger.info("load dataset %s", dataset)
+            cache_testloader = f"cache/{dataset}_testloader_{model_name.replace('/', '_')}_all.cache"
             if os.path.exists(cache_testloader):
                 testloader = torch.load(cache_testloader, weights_only=False)
                 logger.info("load benchmark from %s", cache_testloader)

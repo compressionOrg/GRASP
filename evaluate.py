@@ -24,7 +24,7 @@ def parse_args():
                       help="Number of examples to limit the evaluation to, for debug")
     parser.add_argument("--batch_size", type=int, default=1,
                       help="Batch size for evaluation")
-    parser.add_argument("--device", type=str, choices=["cuda", "cpu"], default="cuda",
+    parser.add_argument("--device", type=str, default="cuda",
                       help="Device to run the model on")
     parser.add_argument("--is_peft_model", action="store_true",
                       help="Whether the model is a PEFT model")
@@ -39,7 +39,7 @@ def main():
     if args.hf:
         model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path)
     else:
-        model = torch.load(args.model_path)
+        model = torch.load(args.model_path).model
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token

@@ -159,12 +159,12 @@ def get_evaluation_dataloader(dataset_name: Literal["wikitext2", "ptb", "c4"], t
         testenc = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
         return testenc
     if "ptb" in dataset_name:
-        valdata = load_dataset(
-            "ptb_text_only",
-            "penn_treebank",
-            split="validation",
-            trust_remote_code=True
-        )
+        # valdata = load_dataset(
+        #     "ptb_text_only",
+        #     "penn_treebank",
+        #     split="validation",
+        #     trust_remote_code=True
+        # )
         valdata = load_from_disk("datasets/ptb/validation")
         testenc = tokenizer("\n\n".join(valdata["sentence"]), return_tensors="pt")
         return testenc
