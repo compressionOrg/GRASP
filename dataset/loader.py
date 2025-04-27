@@ -1,7 +1,7 @@
 import os
 import random
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from typing import Optional, Literal, Union, List
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from transformers import DataCollatorForSeq2Seq
@@ -73,23 +73,25 @@ def get_calibration_dataloader(
         return tokenized_prompt
 
     if 'wikitext2' in dataset_name:
-        train_data = load_dataset(
-            'wikitext',
-            'wikitext-2-raw-v1',
-            split='train'
-        )
+        # train_data = load_dataset(
+        #     'wikitext',
+        #     'wikitext-2-raw-v1',
+        #     split='train'
+        # )
+        train_data = load_from_disk("datasets/wikitext/train")
         random_indices = random.sample(range(len(train_data)), num_samples)
         train_data = train_data.select(random_indices)
         train_dataset = process_pretrain_data(train_data, tokenizer, seq_len, 'text')
         data_collator = None
 
     elif 'c4' in dataset_name:
-        train_data = load_dataset(
-            "allenai/c4",
-            data_files={"train": "en/c4-validation.00000-of-00008.json.gz"},
-            split="train",
-            trust_remote_code=True
-        )
+        # train_data = load_dataset(
+        #     "allenai/c4",
+        #     data_files={"train": "en/c4-validation.00000-of-00008.json.gz"},
+        #     split="train",
+        #     trust_remote_code=True
+        # )
+        train_data = load_from_disk("datasets/c4/train")
         random_indices = random.sample(range(len(train_data)), num_samples)
         train_data = train_data.select(random_indices)
         train_dataset = process_pretrain_data(train_data, tokenizer, seq_len, 'text')
@@ -148,11 +150,12 @@ def get_mix_calibration_dataloader(
 
 def get_evaluation_dataloader(dataset_name: Literal["wikitext2", "ptb", "c4"], tokenizer):
     if "wikitext2" in dataset_name:
-        testdata = load_dataset(
-            "wikitext",
-            "wikitext-2-raw-v1",
-            split="test",
-        )
+        # testdata = load_dataset(
+        #     "wikitext",
+        #     "wikitext-2-raw-v1",
+        #     split="test",
+        # )
+        testdata = load_from_disk("datasets/wikitext/test")
         testenc = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
         return testenc
     if "ptb" in dataset_name:
@@ -162,15 +165,17 @@ def get_evaluation_dataloader(dataset_name: Literal["wikitext2", "ptb", "c4"], t
             split="validation",
             trust_remote_code=True
         )
+        valdata = load_from_disk("datasets/ptb/validation")
         testenc = tokenizer("\n\n".join(valdata["sentence"]), return_tensors="pt")
         return testenc
     if "c4" in dataset_name:
-        testdata = load_dataset(
-            "allenai/c4",
-            data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
-            split="validation",
-            trust_remote_code=True
-        )
+        # testdata = load_dataset(
+        #     "allenai/c4",
+        #     data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
+        #     split="validation",
+        #     trust_remote_code=True
+        # )
+        testdata = load_from_disk("datasets/c4/validation")
         testenc = tokenizer("\n\n".join(testdata["text"]), return_tensors="pt")
         return testenc
     raise NotImplementedError
@@ -198,18 +203,21 @@ def get_test_data(name, tokenizer, seq_len=2048, batch_size = 4):
         return IndexDataset(tensors=test_ids_batch)
     ####
     if 'wikitext2' in name:
-        test_data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        # test_data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        test_data = load_from_disk("datasets/wikitext/test")
         test_dataset = process_data(test_data, tokenizer, seq_len, 'text')
     if 'ptb' in name:
-        test_data = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+        # test_data = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+        test_data = load_from_disk("datasets/ptb/test")
         test_dataset = process_data(test_data, tokenizer, seq_len, 'sentence')
     elif 'c4' in name:
-        test_data = load_dataset(
-            "allenai/c4",
-            data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
-            split="train",
-            trust_remote_code=True
-        )
+        # test_data = load_dataset(
+        #     "allenai/c4",
+        #     data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
+        #     split="train",
+        #     trust_remote_code=True
+        # )
+        test_data = load_from_disk("datasets/c4/validation")
         test_dataset = process_data(test_data[0:2000], tokenizer, seq_len, 'text')
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     return test_loader

@@ -1,4 +1,5 @@
 #!/bin/bash
+export CUDA_VISIBLE_DEVICES=1
 
 # Required arguments
 export MODEL_NAME_OR_PATH="meta-llama/Llama-2-7b-hf"

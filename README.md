@@ -43,6 +43,7 @@ conda create -n grasp python=3.9
 conda activate grasp
 
 # step 3: install dependencies from requirements.txt
+pip install torch==2.3.1+cu118 --index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
 ```
 
