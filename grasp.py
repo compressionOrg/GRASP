@@ -49,6 +49,7 @@ def main(
     use_svd_compensation: Optional[bool] = False,
     compensation_direction: Literal["up", "down", "both"] = "both",
     compensation_ratio: float = 0.5,
+    continuous_layers_as_group: bool = True,  # 新增参数，控制是否将连续层作为一个整体处理
     *args, **kwargs
 ):
     # Setup logger
@@ -75,8 +76,18 @@ def main(
         logger.info("=======> Start Compression ratio allocation with GRASP")
         grasp_model.calculate_layer_compression_ratio()
 
-    # sort layer_id in a descending order
-    layers_id.sort(reverse=True)
+    # 检测连续层
+    if continuous_layers_as_group and len(layers_id) > 1:
+        from tools.layer_compensation import identify_continuous_layers
+        # 先按降序排序
+        layers_id.sort(reverse=True)
+        layer_groups = identify_continuous_layers(layers_id)
+        if len(layer_groups) < len(layers_id):
+            logger.info(f"=======> 检测到连续层组: {layer_groups}")
+    else:
+        # 仍然按降序排序，但不分组
+        layers_id.sort(reverse=True)
+    
     logger.info("=======> Start Compressing model with GRASP")
     if threshold_ratio is not None:
         logger.info("=======> Adaptive rank selection by taylor threshold %s", threshold_ratio)
@@ -97,7 +108,7 @@ def main(
             logger.info(f"=======> 已移除层: {removed_layers}")
             # 过滤掉已移除的层
             layers_id = [layer_id for layer_id in layers_id if layer_id not in removed_layers]
-            if not layers_id or args.skip_grasp_after_compensation:
+            if not layers_id or kwargs.get("skip_grasp_after_compensation", False):
                 if not layers_id:
                     logger.info("=======> 所有指定层已被移除，跳过GRASP压缩")
                 else:
@@ -130,6 +141,7 @@ def main(
                 
                 return grasp_model
     
+    # 继续GRASP压缩流程
     for layer_id in tqdm(layers_id, desc="GRASP Compressing", total=len(layers_id), leave=True):
         # MLP Block
         skip_flag = grasp_model.compress_block(
@@ -266,6 +278,8 @@ def parse_args():
                       help="补偿比例，控制有多少信息被补偿")
     parser.add_argument("--skip_grasp_after_compensation", action="store_true",
                       help="在SVD补偿后跳过GRASP压缩，直接保存模型")
+    parser.add_argument("--continuous_layers_as_group", action="store_true",
+                      help="将连续的层作为一个整体进行处理和补偿")
     
     # Training arguments for recovery
     parser.add_argument("--data_path", type=str, default='yahma/alpaca-cleaned',
