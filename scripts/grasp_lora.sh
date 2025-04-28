@@ -13,11 +13,11 @@ LORA_DROPOUT=0.05
 
 # 恢复训练参数
 RECOVERY=true
-RECOVERY_EPOCHS=50
+RECOVERY_EPOCHS=1000
 RECOVERY_LR=3e-4
 
 # 数据参数 - 减小内存使用
-BATCH_SIZE=1        # 从4减小到1
+BATCH_SIZE=4        # 从4减小到1
 MAX_LENGTH=512      # 从512减小到256
 NUM_SAMPLES=100      # 从100减小到50
 

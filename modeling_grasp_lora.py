@@ -71,6 +71,86 @@ class LoRALayer(nn.Module):
             
         return lora_output.view(b, s, -1)
 
+class WholeLayerLoRA(nn.Module):
+    """
+    整个Transformer层的LoRA替代，直接替换整个层而不是单独替换子模块
+    """
+    def __init__(
+        self,
+        hidden_size: int,
+        rank: int,
+        alpha: float = 16.0,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.rank = rank
+        self.alpha = alpha
+        self.scaling = alpha / rank
+
+        # 初始化LoRA权重
+        self.lora_A = nn.Parameter(torch.zeros((rank, hidden_size)))
+        self.lora_B = nn.Parameter(torch.zeros((hidden_size, rank)))
+        
+        # 初始化
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+        **kwargs
+    ) -> Union[Tuple[torch.Tensor, ...], torch.Tensor]: # Adjusted return type hint
+        """
+        整个Transformer层的前向传播，兼容原始Llama层的接口
+        
+        Args:
+            hidden_states: 输入隐藏状态 (batch, seq_len, hidden_size)
+            attention_mask: 注意力掩码 (可选)
+            position_ids: 位置编码 (可选)
+            past_key_value: 过去的键值对 (可选)
+            output_attentions: 是否输出注意力权重 (可选)
+            use_cache: 是否使用缓存 (可选)
+            
+        Returns:
+            输出隐藏状态和可选的键值对
+        """
+        # 保存原始形状
+        original_shape = hidden_states.shape
+
+        # 检查输入维度 (可选，但有助于调试)
+        if hidden_states.ndim != 3:
+             logger.error(f"WholeLayerLoRA received hidden_states with unexpected shape: {hidden_states.shape}")
+             raise ValueError(f"Expected hidden_states to have 3 dimensions (batch, seq_len, hidden_size), but got {hidden_states.ndim} dimensions with shape {hidden_states.shape}")
+
+        # 计算LoRA输出
+        x_flat = hidden_states.view(-1, self.hidden_size)
+        lora_output = torch.mm(x_flat, self.lora_A.t())
+        lora_output = torch.mm(lora_output, self.lora_B.t())
+        lora_output = lora_output * self.scaling
+
+        # 恢复原始形状
+        output = lora_output.view(original_shape)
+
+        # --- Modification Start ---
+        # 始终返回一个元组，其结构与 LlamaDecoderLayer 兼容
+        # 第一个元素必须是 hidden states 输出
+        layer_outputs = (output,)
+
+        # 根据标志附加占位符，模仿 LlamaDecoderLayer 的签名
+        if output_attentions:
+            layer_outputs += (None,)  # attention weights 的占位符
+
+        if use_cache:
+            layer_outputs += (None,)  # past_key_value 的占位符
+
+        return layer_outputs
+        # --- Modification End ---
+
 class GRASPLoRAModel(nn.Module):
     def __init__(self, model: nn.Module, *args, **kwargs) -> None:
         super(GRASPLoRAModel, self).__init__(*args, **kwargs)
@@ -148,7 +228,7 @@ class GRASPLoRAModel(nn.Module):
         self.redundant_layers = layers_to_remove
         
         return self.layer_importances, layers_to_remove
-
+        
     @staticmethod
     def _extract_layer_index(module_name):
         """
@@ -262,6 +342,196 @@ class GRASPLoRAModel(nn.Module):
         
         return replace_flag
 
+    def replace_whole_layer_with_lora(
+            self,
+            layer_id: int,
+            lora_rank_ratio: float = 0.1,
+            lora_alpha: float = 16.0,
+            device: Literal["cuda", "cpu"] = "cuda",
+            log_file: Optional[str] = None
+        ) -> bool:
+        """
+        将整个Transformer层替换为LoRA层
+        
+        Args:
+            layer_id: 层索引
+            lora_rank_ratio: LoRA秩比例
+            lora_alpha: LoRA缩放因子
+            device: 计算设备
+            log_file: 日志文件路径
+            
+        Returns:
+            是否成功替换
+        """
+        setup_logger(log_file=log_file)
+        
+        try:
+            # 获取隐藏层大小
+            hidden_size = self.model.config.hidden_size
+            
+            # 计算LoRA秩
+            rank = max(1, int(hidden_size * lora_rank_ratio))
+            
+            # 创建整层LoRA替代
+            lora_layer = WholeLayerLoRA(
+                hidden_size=hidden_size,
+                rank=rank,
+                alpha=lora_alpha
+            )
+            
+            # 替换原始层
+            self.model.model.layers[layer_id] = lora_layer
+            
+            # 记录LoRA层信息
+            if layer_id not in self.lora_layers_info:
+                self.lora_layers_info[layer_id] = {}
+            
+            self.lora_layers_info[layer_id]["whole_layer"] = {
+                "hidden_size": hidden_size,
+                "rank": rank,
+                "alpha": lora_alpha
+            }
+            
+            logger.info(f"成功将第 {layer_id} 层整体替换为LoRA层，秩={rank}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"替换第 {layer_id} 层时出错: {e}")
+            return False
+    
+    def compress_model_with_lora(
+            self,
+            calibration_dataloader: DataLoader,
+            layers_id: Optional[Union[List[int], int]] = None,
+            num_prune_layers: Optional[int] = None,
+            lora_rank_ratio: float = 0.1,
+            lora_alpha: float = 16.0,
+            target_modules: List[str] = ["q_proj", "k_proj", "v_proj", "o_proj", "down_proj", "up_proj", "gate_proj"],
+            device: Literal["cuda", "cpu"] = "cuda",
+            angular: bool = False,
+            verbose: bool = False,
+            recovery: bool = True,
+            recovery_epochs: int = 1,
+            recovery_lr: float = 3e-4,
+            continuous_layers_as_group: bool = True,
+            log_file: Optional[str] = None
+        ) -> Dict:
+        """
+        一次性完成模型压缩流程：识别冗余层、替换为LoRA层、训练恢复性能
+        
+        Args:
+            calibration_dataloader: 校准数据加载器
+            layers_id: 要剪枝的层索引列表
+            num_prune_layers: 如果未指定layers_id，要剪枝的层数
+            lora_rank_ratio: LoRA秩比例
+            lora_alpha: LoRA缩放因子
+            target_modules: 要应用LoRA的模块类型
+            device: 计算设备
+            angular: 是否使用角度相似度计算层重要性
+            verbose: 是否输出详细信息
+            recovery: 是否训练LoRA层以恢复性能
+            recovery_epochs: 恢复训练轮数
+            recovery_lr: 恢复训练学习率
+            continuous_layers_as_group: 是否将连续层作为一个组处理
+            log_file: 日志文件路径
+            
+        Returns:
+            压缩结果信息
+        """
+        setup_logger(log_file=log_file)
+        
+        # 如果未指定要剪枝的层，使用BI计算层重要性
+        if layers_id is None:
+            logger.info("=======> 计算层重要性")
+            layers_importance, layers_id = self.compute_bi(
+                num_prune_layers=num_prune_layers, 
+                calibration_dataloader=calibration_dataloader, 
+                angular=angular, 
+                device=device,
+                log_file=log_file
+            )
+            logger.info(f"层重要性 (BI):\n{layers_importance}")
+
+        # 确保layers_id是列表
+        if isinstance(layers_id, int):
+            layers_id = [layers_id]
+        
+        # 存储冗余层信息
+        self.redundant_layers = layers_id
+        
+        # 按降序排序层ID（为了后续移除时避免索引变化）
+        layers_id.sort(reverse=True)
+        
+        # 处理连续层
+        if continuous_layers_as_group and len(layers_id) > 1:
+            layer_groups = self.identify_continuous_layers(layers_id)
+            logger.info(f"=======> 检测到连续层组: {layer_groups}")
+            
+            # 对每个连续层组进行处理
+            for group in layer_groups:
+                if len(group) > 1:
+                    # 连续多层：只替换第一层，然后移除其他层
+                    logger.info(f"=======> 将连续层组 {group} 替换为单个LoRA层")
+                    
+                    # 替换第一层
+                    first_layer = min(group)
+                    self.replace_whole_layer_with_lora(
+                        layer_id=first_layer,
+                        lora_rank_ratio=lora_rank_ratio,
+                        lora_alpha=lora_alpha,
+                        device=device,
+                        log_file=log_file
+                    )
+                    
+                    # 移除其他层（从后向前移除）
+                    for layer_id in sorted(group[1:], reverse=True):
+                        try:
+                            del self.model.model.layers[layer_id]
+                            logger.info(f"成功移除第 {layer_id} 层")
+                        except Exception as e:
+                            logger.error(f"移除第 {layer_id} 层时出错: {e}")
+                else:
+                    # 单层：直接替换
+                    logger.info(f"=======> 将单层 {group[0]} 替换为LoRA层")
+                    self.replace_whole_layer_with_lora(
+                        layer_id=group[0],
+                        lora_rank_ratio=lora_rank_ratio,
+                        lora_alpha=lora_alpha,
+                        device=device,
+                        log_file=log_file
+                    )
+        else:
+            # 不分组处理：每层单独替换
+            logger.info(f"=======> 将各层 {layers_id} 分别替换为LoRA层")
+            for layer_id in layers_id:
+                self.replace_whole_layer_with_lora(
+                    layer_id=layer_id,
+                    lora_rank_ratio=lora_rank_ratio,
+                    lora_alpha=lora_alpha,
+                    device=device,
+                    log_file=log_file
+                )
+        
+        # 训练LoRA层以恢复性能
+        if recovery:
+            logger.info("=======> 开始训练LoRA层以恢复模型性能")
+            self.train_lora_layers(
+                calibration_dataloader=calibration_dataloader,
+                num_epochs=recovery_epochs,
+                learning_rate=recovery_lr,
+                device=device,
+                log_file=log_file
+            )
+        
+        # 更新模型配置中的层数
+        if hasattr(self.model.config, "num_hidden_layers"):
+            self.model.config.num_hidden_layers = len(self.model.model.layers)
+        
+        return {
+            "lora_layers_info": self.lora_layers_info,
+            "redundant_layers": self.redundant_layers
+        }
+        
     def compress_block(
             self,
             layer_id: int,

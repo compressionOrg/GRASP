@@ -47,8 +47,8 @@ def main(
     recovery_lr: float = 3e-4,
     log_file: Optional[str] = None,
     train_device: Optional[str] = None,
-    use_peft: bool = True,
-    continuous_layers_as_group: bool = True,  # 新增参数
+    use_peft: bool = False,
+    continuous_layers_as_group: bool = True,
     *args, **kwargs
 ):
     # 设置日志记录器
@@ -64,80 +64,23 @@ def main(
     grasp_lora_model = GRASPLoRAModel(model=model)
     grasp_lora_model.model.to(device=device)
 
-    # 如果未指定要剪枝的层，使用BI计算层重要性
-    if layers_id is None:
-        logger.info("=======> 计算层重要性")
-        layers_importance, layers_id = grasp_lora_model.compute_bi(
-            num_prune_layers=num_prune_layers, 
-            calibration_dataloader=calibration_dataloader, 
-            angular=angular, 
-            device=device,
-            log_file=log_file
-        )
-        logger.info("层重要性 (BI):\n%s", layers_importance)
-
-    # 确保layers_id是列表
-    if isinstance(layers_id, int):
-        layers_id = [layers_id]
-    
-    # 存储冗余层信息
-    grasp_lora_model.redundant_layers = layers_id
-    
-    # 按降序排序层ID
-    layers_id.sort(reverse=True)
-    
-    # 检测连续层组
-    if continuous_layers_as_group and len(layers_id) > 1:
-        layer_groups = grasp_lora_model.identify_continuous_layers(layers_id)
-        if len(layer_groups) < len(layers_id):
-            logger.info(f"=======> 检测到连续层组: {layer_groups}")
-    
-    logger.info(f"=======> 将对以下层应用LoRA补偿: {layers_id}")
-    
-    # 在移除层之前应用LoRA补偿
-    if use_peft:
-        # 使用PEFT库应用LoRA
-        grasp_lora_model.apply_peft_lora(
-            layers_to_prune=layers_id,
-            lora_rank=int(model.config.hidden_size * lora_rank_ratio),
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-            target_modules=target_modules,
-            device=device,
-            log_file=log_file
-        )
-    else:
-        # 使用自定义LoRA实现
-        lora_layers_info = grasp_lora_model.apply_lora_compensation(
-            layers_to_prune=layers_id,
-            lora_rank_ratio=lora_rank_ratio,
-            lora_alpha=lora_alpha,
-            target_modules=target_modules,
-            device=device,
-            log_file=log_file,
-            continuous_layers_as_group=continuous_layers_as_group  # 传递新参数
-        )
-        logger.info(f"已应用LoRA的层信息: {lora_layers_info}")
-    
-    # 训练LoRA层以恢复性能
-    if recovery:
-        logger.info("=======> 开始训练LoRA层以恢复模型性能")
-        grasp_lora_model.train_lora_layers(
-            calibration_dataloader=calibration_dataloader,
-            num_epochs=recovery_epochs,
-            learning_rate=recovery_lr,
-            device=device,
-            log_file=log_file
-        )
-    
-    # 移除冗余层
-    logger.info(f"=======> 移除冗余层: {layers_id}")
-    removed_layers = grasp_lora_model.remove_layers(layers_to_remove=layers_id)
-    logger.info(f"成功移除的层: {removed_layers}")
-    
-    # 更新模型配置中的层数
-    if hasattr(grasp_lora_model.model.config, "num_hidden_layers"):
-        grasp_lora_model.model.config.num_hidden_layers = len(grasp_lora_model.model.model.layers)
+    # 使用新的compress_model_with_lora方法一次性完成整个压缩流程
+    compression_result = grasp_lora_model.compress_model_with_lora(
+        calibration_dataloader=calibration_dataloader,
+        layers_id=layers_id,
+        num_prune_layers=num_prune_layers,
+        lora_rank_ratio=lora_rank_ratio,
+        lora_alpha=lora_alpha,
+        target_modules=target_modules,
+        device=device,
+        angular=angular,
+        verbose=verbose,
+        recovery=recovery,
+        recovery_epochs=recovery_epochs,
+        recovery_lr=recovery_lr,
+        continuous_layers_as_group=continuous_layers_as_group,
+        log_file=log_file
+    )
     
     # 保存模型
     logger.info("=======> 保存模型")
@@ -147,7 +90,7 @@ def main(
         if not os.path.exists("./checkpoint"):
             os.makedirs("./checkpoint", exist_ok=True)
         model_id: str = grasp_lora_model.model.config._name_or_path
-        save_path = os.path.join("./checkpoint", f"{model_id.replace('/', '-')}_lora_compensated.pth")
+        save_path = os.path.join("./checkpoint", f"{model_id.replace('/', '-')}_lora_replaced.pth")
         torch.save(grasp_lora_model, save_path)
     
     logger.info(f"模型已保存到: {save_path}")
