@@ -704,7 +704,8 @@ class GRASPLoRAModel(nn.Module):
             logger.info(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.4f}")
         
         logger.info("LoRA层训练完成")
-        
+        # 打印可训练参数
+        self.print_trainable_params(log_file=log_file)
         # 冻结所有参数
         for param in self.model.parameters():
             param.requires_grad = False
