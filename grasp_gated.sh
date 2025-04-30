@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 python grasp_gated.py --model_name meta-llama/Llama-2-7b-hf \
   --auto_select \

@@ -40,6 +40,8 @@ def main():
         model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path)
     else:
         model = torch.load(args.model_path).model
+
+    model = model.to(args.device)
     
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token

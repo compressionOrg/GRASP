@@ -1,25 +1,24 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0
+# export CUDA_VISIBLE_DEVICES=0
 # Set default values
 MODEL_NAME_OR_PATH="meta-llama/Llama-2-7b-hf"
-MODEL_PATH="checkpoint/${MODEL_NAME_OR_PATH//\//-}.pth"
+# MODEL_PATH="checkpoint/${MODEL_NAME_OR_PATH//\//-}.pth"
 LOG_DIR="logs"
-TASKS="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa"
-EVAL_PPL="wikitext2" # ,ptb,c4
+TASKS="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa" # mathqa
+EVAL_PPL="wikitext2,ptb,c4"
 BATCH_SIZE=1
 DEVICE="cuda:0"
-HF=false
+HF=true
 
 # Create log directory if it doesn't exist
 mkdir -p $LOG_DIR
 
 # Generate timestamp for log file
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_FILE="$LOG_DIR/evaluation_${TIMESTAMP}.log"
+LOG_FILE="$LOG_DIR/evaluation_llama2_7b_dense${TIMESTAMP}.log"
 
 # Run evaluation
 python evaluate.py \
-    --model_path $MODEL_PATH \
     --model_name_or_path $MODEL_NAME_OR_PATH \
     --tasks $TASKS \
     --eval_ppl $EVAL_PPL \

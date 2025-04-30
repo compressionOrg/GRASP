@@ -39,7 +39,7 @@ def parse_args():
     parser.add_argument("--angular", action="store_true", help="是否使用角度距离计算层重要性")
     
     # 训练参数
-    parser.add_argument("--num_epochs", type=int, default=300, help="训练轮数")
+    parser.add_argument("--num_epochs", type=int, default=500, help="训练轮数")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="学习率")
     
     # 其他参数
