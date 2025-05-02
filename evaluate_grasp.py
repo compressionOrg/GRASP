@@ -155,9 +155,12 @@ def evaluate_model(
     lm = EvalLM(model, tokenizer, batch_size=batch_size, device=device)
     results = {}
     if eval_ppl:
+        cache_path = "cache"
+        if not os.path.exists(cache_path):
+            os.mkdir(cache_path)
         for dataset in eval_ppl.split(","):
             logger.info("load dataset %s", dataset)
-            cache_testloader = f"cache/{dataset}_testloader_{model_name.replace('/', '_')}_all.cache"
+            cache_testloader = f"{cache_path}/{dataset}_testloader_all.cache"
             if os.path.exists(cache_testloader):
                 testloader = torch.load(cache_testloader, weights_only=False)
                 logger.info("load benchmark from %s", cache_testloader)
@@ -186,7 +189,7 @@ def evaluate_model(
                     outputs = lm.model.model(batch)
                     hidden_states = outputs[0]
                     logits = lm.model.lm_head(hidden_states)
-                shift_logits = logits[:, :-1, :]
+                shift_logits = logits[:, :-1, :].to(lm.device)
                 shift_labels = testenc[:, (i * lm.seqlen) : ((i + 1) * lm.seqlen)][:, 1:].to(lm.device)
                 loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(

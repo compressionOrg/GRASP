@@ -83,10 +83,26 @@ class GRASPModel(nn.Module):
     def __init__(self, model: nn.Module, *args, **kwargs) -> None:
         super(GRASPModel, self).__init__(*args, **kwargs)
         self.model = model
+        # 默认冻结所有参数，之后可以解冻需要的
         for params in self.model.parameters():
             params.requires_grad = False
 
         self.grasp_values_dict = {}
+        self.redundant_layers = []
+    
+    def forward(self, *args, **kwargs):
+        # 确保forward能正确传递到模型
+        return self.model(*args, **kwargs)
+    
+    def prepare_for_training(self, lora_target_modules=None):
+        """为训练准备模型参数"""
+        # 确保所有LoRA参数都需要梯度
+        if lora_target_modules:
+            for name, module in self.model.named_modules():
+                for target in lora_target_modules:
+                    if target in name:
+                        for param_name, param in module.named_parameters(recurse=False):
+                            param.requires_grad = True
     
     def calculate_layer_compression_ratio(self, redundant_layers: Optional[List] = None):
         '''

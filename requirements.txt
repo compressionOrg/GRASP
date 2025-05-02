@@ -7,8 +7,10 @@ torchmetrics==1.4.3
 tqdm==4.66.5
 lm-eval==0.3.0
 transformers==4.45.2
-datasets==3.0.1
+datasets==2.14.5
 deepspeed==0.15.2
 peft==0.13.2
 accelerate==1.1.1
 setproctitle
+sentencepiece
+protobuf

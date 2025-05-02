@@ -37,10 +37,12 @@ def main():
     args = parse_args()
 
     if args.hf:
-        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path)
+        model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, device_map="auto", torch_dtype=torch.float16)
     else:
         model = torch.load(args.model_path).model
-    
+        # 确保模型加载到正确的设备上
+        # model = model.to(args.device)
+
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
     
