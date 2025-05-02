@@ -124,6 +124,8 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 
+    logger.info(f"model:{model_name_or_path}")
+
     short_model = GRASPModel(model=model)
 
     # 如果未指定要剪枝的层，则计算层重要性并选择最不重要的层
@@ -145,7 +147,7 @@ def main(
 
     # 按降序排序层ID，以避免删除层时的索引错误
     layers_id.sort(reverse=True)
-    
+
     logger.info("=======> 开始直接剪枝模型")
     logger.info(f"要剪枝的层: {layers_id}")
     
@@ -299,7 +301,7 @@ def parse_args():
                       help="启用评估")
     parser.add_argument("--eval_ppl", type=str, default="wikitext2,ptb",
                       help="要评估的数据集")
-    parser.add_argument("--eval_tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,mathqa",
+    parser.add_argument("--tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,mathqa",
                       help="要评估的任务")
     parser.add_argument("--num_fewshot", type=int, default=0,
                       help="少样本示例数")
@@ -313,8 +315,6 @@ if __name__ == "__main__":
     setproctitle("ShortGPT")
     args = parse_args()
     
-    logger.info(f"model:{args.model_name_or_path}")
-    logger.info(f"args info:{args}")
     # 设置分布式训练环境
     if args.local_rank != -1:
         torch.cuda.set_device(args.local_rank)
@@ -384,7 +384,7 @@ if __name__ == "__main__":
             model=short_model.model,
             tokenizer=tokenizer,
             model_name=args.model_name_or_path,
-            tasks=args.eval_tasks,
+            tasks=args.tasks,
             eval_ppl=args.eval_ppl,
             num_fewshot=args.num_fewshot,
             limit=args.limit,
