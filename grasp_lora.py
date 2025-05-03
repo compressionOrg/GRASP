@@ -101,7 +101,7 @@ def main(
         logger.info("=======> 开始LoRA参数恢复训练")
         # 确保只有LoRA层的参数是可训练的
         logger.info("=======> 确保只有LoRA层的参数是可训练的")
-        grasp_lora_model.ensure_only_lora_trainable(log_file=log_file)
+        # 删除对 ensure_only_lora_trainable 的调用
         
         # 直接调用alpaca_grasp.py中的train函数
         from alpaca_grasp import train
@@ -126,7 +126,6 @@ def main(
         logger.info("=======> 开始额外的恢复训练")
         # 确保只有LoRA层的参数是可训练的
         logger.info("=======> 确保只有LoRA层的参数是可训练的")
-        grasp_lora_model.ensure_only_lora_trainable(log_file=log_file)
         
         grasp_lora_model = train(
             grasp_model=grasp_lora_model,

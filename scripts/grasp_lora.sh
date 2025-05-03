@@ -17,8 +17,8 @@ RECOVERY_EPOCHS=1
 RECOVERY_LR=3e-4
 
 # 数据参数 - 减小内存使用
-BATCH_SIZE=32
-MAX_LENGTH=64       # 进一步减小序列长度
+BATCH_SIZE=1
+MAX_LENGTH=128       # 进一步减小序列长度
 NUM_SAMPLES=50
 
 # 其他参数
