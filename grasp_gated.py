@@ -40,8 +40,8 @@ def parse_args():
     
     # 训练参数
     parser.add_argument("--num_epochs", type=int, default=500, help="训练轮数")
-    parser.add_argument("--learning_rate", type=float, default=1e-3, help="学习率")
-    
+    parser.add_argument("--learning_rate", type=float, default=3e-3, help="学习率")
+
     # 其他参数
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"], help="计算设备")
     parser.add_argument("--output_dir", type=str, default="./outputs", help="输出目录")
@@ -120,7 +120,7 @@ def main():
     logger.info(f"识别到的连续层组: {layer_groups}")
     
     # 应用门控残差连接
-    gated_residuals = gated_model.apply_gated_residual(
+    gated_model.apply_gated_residual(
         layers_to_prune=layers_to_prune,
         device=args.device,
         log_file=log_file,

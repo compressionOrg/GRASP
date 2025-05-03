@@ -14,9 +14,9 @@ def parse_args():
     parser.add_argument("--model_name_or_path", type=str, required=False,
                       help="Path to pretrained model or model identifier from huggingface.co/models")
     # Optional arguments
-    parser.add_argument("--tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa",
+    parser.add_argument("--tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,mathqa",
                       help="Tasks to evaluate on, separated by commas")
-    parser.add_argument("--eval_ppl", type=str, default="wikitext2,ptb,c4",
+    parser.add_argument("--eval_ppl", type=str, default="wikitext2,ptb",
                       help="Datasets to evaluate perplexity on, separated by commas")
     parser.add_argument("--num_fewshot", type=int, default=0,
                       help="Number of few-shot examples")

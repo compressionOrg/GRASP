@@ -293,6 +293,11 @@ class GatedResidualModel(nn.Module):
         calibration_dataloader: DataLoader,
         num_epochs: int = 3,
         learning_rate: float = 1e-3,
+        weight_decay: float = 0.01,
+        warmup_ratio: float = 0.1,
+        lr_scheduler_type: Literal["cosine", "linear", "constant"] = "cosine",
+        gradient_clip_val: Optional[float] = 1.0,
+        early_stopping_patience: Optional[int] = None,
         device: Literal["cuda", "cpu"] = "cuda",
         log_file: Optional[str] = None,
     ) -> None:
@@ -302,10 +307,14 @@ class GatedResidualModel(nn.Module):
         Args:
             calibration_dataloader: 校准数据加载器
             num_epochs: 训练轮数
-            learning_rate: 学习率
+            learning_rate: 最大学习率
+            weight_decay: AdamW优化器的权重衰减系数
+            warmup_ratio: 预热阶段占总训练步数的比例
+            lr_scheduler_type: 学习率调度策略类型，支持"cosine"(余弦退火)、"linear"(线性衰减)和"constant"(恒定)
+            gradient_clip_val: 梯度裁剪阈值，None表示不进行梯度裁剪
+            early_stopping_patience: 早停耐心值，None表示不使用早停
             device: 计算设备
             log_file: 日志文件路径
-            remove_layers_before_training: 是否在训练前移除冗余层
         """
         setup_logger(log_file)
         logger.info(f"开始训练门控残差参数，共 {len(self.gated_residuals)} 个门控模块")
@@ -322,9 +331,46 @@ class GatedResidualModel(nn.Module):
         for gated_res in self.gated_residuals.values():
             gated_res.gate.requires_grad = True
         
-        # 创建优化器
+        # 创建优化器 - 使用AdamW替代Adam
         parameters = [gated_res.gate for gated_res in self.gated_residuals.values()]
-        optimizer = torch.optim.Adam(parameters, lr=learning_rate)
+        optimizer = torch.optim.AdamW(parameters, lr=learning_rate, weight_decay=weight_decay)
+        
+        # 计算总训练步数
+        total_steps = len(calibration_dataloader) * num_epochs
+        warmup_steps = int(total_steps * warmup_ratio)
+        
+        # 创建学习率调度器
+        if lr_scheduler_type == "cosine":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=total_steps - warmup_steps, eta_min=1e-6
+            )
+        elif lr_scheduler_type == "linear":
+            scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer, 
+                start_factor=1.0, 
+                end_factor=0.1, 
+                total_iters=total_steps - warmup_steps
+            )
+        else:  # constant
+            scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=total_steps)
+        
+        # 创建预热调度器
+        if warmup_steps > 0:
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[
+                    torch.optim.lr_scheduler.LinearLR(
+                        optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps
+                    ),
+                    scheduler
+                ],
+                milestones=[warmup_steps]
+            )
+        
+        # 早停机制
+        best_loss = float('inf')
+        patience_counter = 0
+        best_gate_values = {}
         
         # 训练循环
         self.model.train()
@@ -361,14 +407,44 @@ class GatedResidualModel(nn.Module):
                 # 反向传播和优化
                 optimizer.zero_grad()
                 loss.backward()
+                
+                # 梯度裁剪
+                if gradient_clip_val is not None:
+                    torch.nn.utils.clip_grad_norm_(parameters, gradient_clip_val)
+                
                 optimizer.step()
+                scheduler.step()  # 更新学习率
+                
+                # 记录当前学习率
+                current_lr = scheduler.get_last_lr()[0]
                 
                 total_loss += loss.item()
                 num_batches += 1
             
-            # 打印每个epoch的平均损失
+            # 计算平均损失
             avg_loss = total_loss / num_batches
-            logger.info(f"Epoch {epoch+1}/{num_epochs}, 平均损失: {avg_loss:.4f}")
+            logger.info(f"Epoch {epoch+1}/{num_epochs}, 平均损失: {avg_loss:.4f}, 学习率: {current_lr:.6f}")
+            
+            # 早停检查
+            if early_stopping_patience is not None:
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    patience_counter = 0
+                    # 保存最佳门控值
+                    best_gate_values = {layer_idx: gated_res.get_gate_value() 
+                                       for layer_idx, gated_res in self.gated_residuals.items()}
+                else:
+                    patience_counter += 1
+                    logger.info(f"早停计数: {patience_counter}/{early_stopping_patience}")
+                    if patience_counter >= early_stopping_patience:
+                        logger.info(f"触发早停机制，在 {epoch+1} 轮停止训练")
+                        # 恢复最佳门控值
+                        for layer_idx, gate_value in best_gate_values.items():
+                            with torch.no_grad():
+                                # 反向计算gate参数值
+                                inverse_sigmoid = torch.log(torch.tensor(gate_value) / (1 - torch.tensor(gate_value)))
+                                self.gated_residuals[layer_idx].gate.data.fill_(inverse_sigmoid)
+                        break
         
         # 打印训练后的门控值
         for layer_idx, gated_res in self.gated_residuals.items():
