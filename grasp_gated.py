@@ -51,7 +51,7 @@ def parse_args():
     # 评估参数
     parser.add_argument("--evaluate", action="store_true", help="是否进行评估")
     parser.add_argument("--eval_ppl", type=str, default="wikitext2,ptb,c4", help="用于评估困惑度的数据集，用逗号分隔")
-    parser.add_argument("--eval_tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa", 
+    parser.add_argument("--eval_tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,mathqa", 
                       help="评估任务，用逗号分隔")
     parser.add_argument("--num_fewshot", type=int, default=0, help="少样本示例数量")
     parser.add_argument("--limit", type=int, default=-1, help="限制评估的样本数量，用于调试")
@@ -75,7 +75,6 @@ def main():
     logger.info(f"参数: {args}")
     
     # 加载模型和分词器
-    logger.info(f"加载模型 {args.model_name}")
     model = AutoModelForCausalLM.from_pretrained(args.model_name)
     model = model.to(args.device)  # 确保模型在正确的设备上
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
@@ -93,7 +92,7 @@ def main():
         seq_len=args.seq_len,
         padding=args.padding 
     )
-    
+    logger.info(f"剪枝模型： {args.model_name}")
     # 创建GatedResidualModel实例
     gated_model = GatedResidualModel(model)
     

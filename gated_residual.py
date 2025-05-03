@@ -134,7 +134,7 @@ class GatedResidualModel(nn.Module):
         remove_layers: bool = True  # 控制是否立即移除冗余层
     ) -> Dict[int, GatedResidual]:
         """
-        先移除剪枝层，然后在移除层的前后添加门控残差连接。
+        先移除剪枝层，然后在移除区域添加一个门控残差连接，直接连接上一层输出和下一层输入。
         
         Args:
             layers_to_prune: 要剪枝的层索引列表
@@ -190,7 +190,7 @@ class GatedResidualModel(nn.Module):
                     layer_index_map[original_idx] = new_idx
                     new_idx += 1
         
-        # 对每个连续层组，在其前后添加门控残差连接
+        # 对每个连续层组，添加一个门控残差连接
         for group in self.layer_groups:
             # 确定组的边界
             first_layer = min(group)
@@ -200,8 +200,10 @@ class GatedResidualModel(nn.Module):
             prev_layer_idx = first_layer - 1
             next_layer_idx = last_layer + 1
             
-            # 如果前一层存在且不在要剪枝的层中
-            if prev_layer_idx >= 0 and prev_layer_idx not in valid_layers:
+            # 只有当前后层都存在且不在要剪枝的层中时，才添加门控残差
+            if prev_layer_idx >= 0 and next_layer_idx < num_layers and \
+               prev_layer_idx not in valid_layers and next_layer_idx not in valid_layers:
+                
                 # 获取前一层的新索引
                 new_prev_idx = layer_index_map.get(prev_layer_idx, prev_layer_idx)
                 
@@ -214,77 +216,41 @@ class GatedResidualModel(nn.Module):
                 self._original_forwards[new_prev_idx] = original_forward
                 
                 # 定义新的前向传播函数，添加门控残差
-                def make_forward_with_residual(original_forward, gated_res):
+                def make_forward_with_residual(original_forward, gated_res, next_layer_idx):
                     def forward_with_residual(hidden_states, *args, **kwargs):
-                        # 保存输入作为残差连接
+                        # 保存输入作为残差连接的源
                         residual = hidden_states
                         
                         # 调用原始前向传播
                         outputs = original_forward(hidden_states, *args, **kwargs)
                         
-                        # 应用门控残差连接
+                        # 获取输出隐藏状态
                         if isinstance(outputs, tuple):
-                            # 如果输出是元组，修改第一个元素（隐藏状态）
                             hidden_states_out = outputs[0]
-                            gated_output = gated_res(hidden_states_out, residual)
+                        else:
+                            hidden_states_out = outputs
+                        
+                        # 应用门控残差连接，直接连接到下一层的输入
+                        # 这里的residual是当前层的输入，将与当前层的输出进行门控融合
+                        # 融合后的结果将作为下一层的输入
+                        gated_output = gated_res(hidden_states_out, residual)
+                        
+                        # 根据输出类型返回结果
+                        if isinstance(outputs, tuple):
                             outputs = (gated_output,) + outputs[1:]
                         else:
-                            # 如果输出是张量，直接应用门控
-                            outputs = gated_res(outputs, residual)
+                            outputs = gated_output
                         
                         return outputs
                     
                     return forward_with_residual
                 
                 # 替换层的前向传播函数
-                original_layer.forward = make_forward_with_residual(original_forward, gated_res)
+                original_layer.forward = make_forward_with_residual(original_forward, gated_res, next_layer_idx)
                 
                 # 记录添加的门控残差模块
                 self.gated_residuals[new_prev_idx] = gated_res
-                logger.info(f"成功在第 {prev_layer_idx}(新索引:{new_prev_idx}) 层添加门控残差连接")
-            
-            # 如果后一层存在且不在要剪枝的层中
-            if next_layer_idx < num_layers and next_layer_idx not in valid_layers:
-                # 获取后一层的新索引
-                new_next_idx = layer_index_map.get(next_layer_idx, next_layer_idx - len([l for l in valid_layers if l < next_layer_idx]))
-                
-                # 创建门控残差模块
-                gated_res = GatedResidual(hidden_size).to(device)
-                
-                # 保存原始层的前向传播函数
-                original_layer = self.model.model.layers[new_next_idx]
-                original_forward = original_layer.forward
-                self._original_forwards[new_next_idx] = original_forward
-                
-                # 定义新的前向传播函数，添加门控残差
-                def make_forward_with_residual(original_forward, gated_res):
-                    def forward_with_residual(hidden_states, *args, **kwargs):
-                        # 保存输入作为残差连接
-                        residual = hidden_states
-                        
-                        # 调用原始前向传播
-                        outputs = original_forward(hidden_states, *args, **kwargs)
-                        
-                        # 应用门控残差连接
-                        if isinstance(outputs, tuple):
-                            # 如果输出是元组，修改第一个元素（隐藏状态）
-                            hidden_states_out = outputs[0]
-                            gated_output = gated_res(hidden_states_out, residual)
-                            outputs = (gated_output,) + outputs[1:]
-                        else:
-                            # 如果输出是张量，直接应用门控
-                            outputs = gated_res(outputs, residual)
-                        
-                        return outputs
-                    
-                    return forward_with_residual
-                
-                # 替换层的前向传播函数
-                original_layer.forward = make_forward_with_residual(original_forward, gated_res)
-                
-                # 记录添加的门控残差模块
-                self.gated_residuals[new_next_idx] = gated_res
-                logger.info(f"成功在第 {next_layer_idx}(新索引:{new_next_idx}) 层添加门控残差连接")
+                logger.info(f"成功在第 {prev_layer_idx}(新索引:{new_prev_idx}) 层添加门控残差连接，连接到第 {next_layer_idx} 层")
         
         return self.gated_residuals
     

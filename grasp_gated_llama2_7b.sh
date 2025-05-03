@@ -5,4 +5,4 @@ python grasp_gated.py --model_name meta-llama/Llama-2-7b-hf \
   --num_prune_layers 7 \
   --evaluate \
   --eval_ppl "wikitext2,ptb" \
-  --num_epochs 5000 \
+  --num_epochs 100 \
