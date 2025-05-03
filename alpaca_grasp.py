@@ -72,15 +72,36 @@ def train(
     for param in grasp_model.parameters():
         param.requires_grad_(False)
 
-    # set trainable paramters
-    redundant_layers = getattr(grasp_model, "redundant_layers", None)
-    if redundant_layers is None:
-        redundant_layers = kwargs.get("redundant_layers", [i for i in range(len(grasp_model.model.model.layers))])
-    
-    for layer_idx in redundant_layers:
-        layer: nn.Module = grasp_model.model.model.layers[layer_idx]
-        for param in layer.parameters():
-            param.requires_grad_(True)
+    # 检查模型是否有 ensure_only_lora_trainable 方法
+    if hasattr(grasp_model, 'ensure_only_lora_trainable'):
+        # 如果有，调用该方法确保只有 LoRA 层是可训练的
+        logger.info("使用 ensure_only_lora_trainable 方法设置可训练参数")
+        grasp_model.ensure_only_lora_trainable(log_file=log_file)
+    else:
+        # 如果没有该方法，则使用原来的方式设置可训练参数
+        logger.info("使用传统方式设置可训练参数")
+        # set trainable paramters
+        redundant_layers = getattr(grasp_model, "redundant_layers", None)
+        if redundant_layers is None:
+            redundant_layers = kwargs.get("redundant_layers", [i for i in range(len(grasp_model.model.model.layers))])
+        
+        # 检查是否有 lora_layers_info 属性，如果有，则只训练 LoRA 层
+        if hasattr(grasp_model, 'lora_layers_info') and grasp_model.lora_layers_info:
+            logger.info("检测到 LoRA 层信息，只训练 LoRA 层参数")
+            # 遍历所有模块，找到 LoRA 层并设置其参数为可训练
+            from modeling_grasp_lora import LoRALayer, WholeLayerLoRA
+            for name, module in grasp_model.model.named_modules():
+                if isinstance(module, (LoRALayer, WholeLayerLoRA)):
+                    for param_name, param in module.named_parameters():
+                        param.requires_grad = True
+                    logger.info(f"设置 LoRA 层 {name} 的参数为可训练")
+        else:
+            # 如果没有 LoRA 层信息，则按照原来的方式设置可训练参数
+            logger.info("未检测到 LoRA 层信息，按照原来的方式设置可训练参数")
+            for layer_idx in range(len(grasp_model.model.model.layers)):
+                layer: nn.Module = grasp_model.model.model.layers[layer_idx]
+                for param in layer.parameters():
+                    param.requires_grad_(True)
 
     total_params = sum(p.numel() for p in grasp_model.parameters())
     trainable_params = sum(p.numel() for p in grasp_model.parameters() if p.requires_grad)

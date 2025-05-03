@@ -1,9 +1,9 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0  # 改为单GPU训练
 
 # 模型参数
 MODEL_NAME_OR_PATH="meta-llama/Llama-2-7b-hf"
-DATASET_NAME="wikitext2"
+DATASET_NAME="wikitext2,ptb"
 
 # LoRA参数
 NUM_PRUNE_LAYERS=7
@@ -13,13 +13,13 @@ LORA_DROPOUT=0.05
 
 # 恢复训练参数
 RECOVERY=true
-RECOVERY_EPOCHS=1000
+RECOVERY_EPOCHS=1
 RECOVERY_LR=3e-4
 
 # 数据参数 - 减小内存使用
-BATCH_SIZE=4        # 从4减小到1
-MAX_LENGTH=512      # 从512减小到256
-NUM_SAMPLES=100      # 从100减小到50
+BATCH_SIZE=32
+MAX_LENGTH=64       # 进一步减小序列长度
+NUM_SAMPLES=50
 
 # 其他参数
 DEVICE="cuda"
@@ -47,6 +47,6 @@ python grasp_lora.py \
   --recovery_epochs $RECOVERY_EPOCHS \
   --recovery_lr $RECOVERY_LR \
   --evaluate \
-  --eval_ppl "wikitext2"\
+  --eval_ppl "wikitext2"
   
 echo "GRASP-LoRA 压缩完成。日志文件保存在: $LOG_FILE"

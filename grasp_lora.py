@@ -75,11 +75,12 @@ def main(
         device=device,
         angular=angular,
         verbose=verbose,
-        recovery=recovery,
+        recovery=False,  # 先设为False，我们将在下面单独处理恢复训练
         recovery_epochs=recovery_epochs,
         recovery_lr=recovery_lr,
         continuous_layers_as_group=continuous_layers_as_group,
-        log_file=log_file
+        log_file=log_file,
+        tokenizer=tokenizer  # 传入tokenizer
     )
     
     # 保存模型
@@ -95,9 +96,38 @@ def main(
     
     logger.info(f"模型已保存到: {save_path}")
     
+    # 如果需要进行恢复训练
+    if recovery:
+        logger.info("=======> 开始LoRA参数恢复训练")
+        # 确保只有LoRA层的参数是可训练的
+        logger.info("=======> 确保只有LoRA层的参数是可训练的")
+        grasp_lora_model.ensure_only_lora_trainable(log_file=log_file)
+        
+        # 直接调用alpaca_grasp.py中的train函数
+        from alpaca_grasp import train
+        # 在调用train函数时
+        grasp_lora_model = train(
+            grasp_model=grasp_lora_model,  # 确保这里传递的是正确的模型对象
+            tokenizer=tokenizer,
+            output_dir=os.path.dirname(save_path),
+            num_epochs=recovery_epochs,
+            learning_rate=recovery_lr,
+            log_file=log_file,
+            train_device=train_device,
+            **kwargs
+        )
+        # 保存恢复训练后的模型
+        recovery_save_path = save_path.replace(".pth", "_recovered.pth")
+        torch.save(grasp_lora_model, recovery_save_path)
+        logger.info(f"恢复训练后的模型已保存到: {recovery_save_path}")
+    
     # 如果需要进行额外的恢复训练
     if kwargs.get("additional_recovery", False):
         logger.info("=======> 开始额外的恢复训练")
+        # 确保只有LoRA层的参数是可训练的
+        logger.info("=======> 确保只有LoRA层的参数是可训练的")
+        grasp_lora_model.ensure_only_lora_trainable(log_file=log_file)
+        
         grasp_lora_model = train(
             grasp_model=grasp_lora_model,
             tokenizer=tokenizer,

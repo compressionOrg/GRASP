@@ -155,6 +155,7 @@ class GRASPLoRAModel(nn.Module):
     def __init__(self, model: nn.Module, *args, **kwargs) -> None:
         super(GRASPLoRAModel, self).__init__(*args, **kwargs)
         self.model = model
+        # 冻结所有参数
         for params in self.model.parameters():
             params.requires_grad = False
 
@@ -317,6 +318,10 @@ class GRASPLoRAModel(nn.Module):
                 self._set_module(self.model, target_layer, lora_layer)
                 replace_flag = True
                 
+                # 确保只有LoRA层的参数是可训练的
+                for param in lora_layer.parameters():
+                    param.requires_grad = True
+                
                 # 记录LoRA层信息
                 layer_idx = self._extract_layer_index(target_layer)
                 if layer_idx is not None:
@@ -382,6 +387,10 @@ class GRASPLoRAModel(nn.Module):
             # 替换原始层
             self.model.model.layers[layer_id] = lora_layer
             
+            # 确保只有LoRA层的参数是可训练的
+            for param in lora_layer.parameters():
+                param.requires_grad = True
+            
             # 记录LoRA层信息
             if layer_id not in self.lora_layers_info:
                 self.lora_layers_info[layer_id] = {}
@@ -405,313 +414,207 @@ class GRASPLoRAModel(nn.Module):
             layers_id: Optional[Union[List[int], int]] = None,
             num_prune_layers: Optional[int] = None,
             lora_rank_ratio: float = 0.1,
-            lora_alpha: float = 16.0,
+            lora_alpha: float = 16,
             target_modules: List[str] = ["q_proj", "k_proj", "v_proj", "o_proj", "down_proj", "up_proj", "gate_proj"],
             device: Literal["cuda", "cpu"] = "cuda",
-            angular: bool = False,
-            verbose: bool = False,
-            recovery: bool = True,
+            angular: Optional[bool] = False,
+            verbose: Optional[bool] = False,
+            recovery: Optional[bool] = True,
             recovery_epochs: int = 1,
             recovery_lr: float = 3e-4,
             continuous_layers_as_group: bool = True,
-            log_file: Optional[str] = None
-        ) -> Dict:
-        """
-        一次性完成模型压缩流程：识别冗余层、替换为LoRA层、训练恢复性能
-        
-        Args:
-            calibration_dataloader: 校准数据加载器
-            layers_id: 要剪枝的层索引列表
-            num_prune_layers: 如果未指定layers_id，要剪枝的层数
-            lora_rank_ratio: LoRA秩比例
-            lora_alpha: LoRA缩放因子
-            target_modules: 要应用LoRA的模块类型
-            device: 计算设备
-            angular: 是否使用角度相似度计算层重要性
-            verbose: 是否输出详细信息
-            recovery: 是否训练LoRA层以恢复性能
-            recovery_epochs: 恢复训练轮数
-            recovery_lr: 恢复训练学习率
-            continuous_layers_as_group: 是否将连续层作为一个组处理
-            log_file: 日志文件路径
-            
-        Returns:
-            压缩结果信息
-        """
-        setup_logger(log_file=log_file)
-        
-        # 如果未指定要剪枝的层，使用BI计算层重要性
-        if layers_id is None:
-            logger.info("=======> 计算层重要性")
-            layers_importance, layers_id = self.compute_bi(
-                num_prune_layers=num_prune_layers, 
-                calibration_dataloader=calibration_dataloader, 
-                angular=angular, 
-                device=device,
-                log_file=log_file
-            )
-            logger.info(f"层重要性 (BI):\n{layers_importance}")
-
-        # 确保layers_id是列表
-        if isinstance(layers_id, int):
-            layers_id = [layers_id]
-        
-        # 存储冗余层信息
-        self.redundant_layers = layers_id
-        
-        # 按降序排序层ID（为了后续移除时避免索引变化）
-        layers_id.sort(reverse=True)
-        
-        # 处理连续层
-        if continuous_layers_as_group and len(layers_id) > 1:
-            layer_groups = self.identify_continuous_layers(layers_id)
-            logger.info(f"=======> 检测到连续层组: {layer_groups}")
-            
-            # 对每个连续层组进行处理
-            for group in layer_groups:
-                if len(group) > 1:
-                    # 连续多层：只替换第一层，然后移除其他层
-                    logger.info(f"=======> 将连续层组 {group} 替换为单个LoRA层")
-                    
-                    # 替换第一层
-                    first_layer = min(group)
-                    self.replace_whole_layer_with_lora(
-                        layer_id=first_layer,
-                        lora_rank_ratio=lora_rank_ratio,
-                        lora_alpha=lora_alpha,
-                        device=device,
-                        log_file=log_file
-                    )
-                    
-                    # 移除其他层（从后向前移除）
-                    for layer_id in sorted(group[1:], reverse=True):
-                        try:
-                            del self.model.model.layers[layer_id]
-                            logger.info(f"成功移除第 {layer_id} 层")
-                        except Exception as e:
-                            logger.error(f"移除第 {layer_id} 层时出错: {e}")
-                else:
-                    # 单层：直接替换
-                    logger.info(f"=======> 将单层 {group[0]} 替换为LoRA层")
-                    self.replace_whole_layer_with_lora(
-                        layer_id=group[0],
-                        lora_rank_ratio=lora_rank_ratio,
-                        lora_alpha=lora_alpha,
-                        device=device,
-                        log_file=log_file
-                    )
-        else:
-            # 不分组处理：每层单独替换
-            logger.info(f"=======> 将各层 {layers_id} 分别替换为LoRA层")
-            for layer_id in layers_id:
-                self.replace_whole_layer_with_lora(
-                    layer_id=layer_id,
-                    lora_rank_ratio=lora_rank_ratio,
-                    lora_alpha=lora_alpha,
-                    device=device,
-                    log_file=log_file
-                )
-        
-        # 训练LoRA层以恢复性能
-        if recovery:
-            logger.info("=======> 开始训练LoRA层以恢复模型性能")
-            self.train_lora_layers(
-                calibration_dataloader=calibration_dataloader,
-                num_epochs=recovery_epochs,
-                learning_rate=recovery_lr,
-                device=device,
-                log_file=log_file
-            )
-        
-        # 更新模型配置中的层数
-        if hasattr(self.model.config, "num_hidden_layers"):
-            self.model.config.num_hidden_layers = len(self.model.model.layers)
-        
-        return {
-            "lora_layers_info": self.lora_layers_info,
-            "redundant_layers": self.redundant_layers
-        }
-        
-    def compress_block(
-            self,
-            layer_id: int,
-            block_type: Literal["attention", "mlp"],
-            target_layer_types: Union[List[str], str] = ["q_proj", "k_proj", "v_proj", "o_proj", "down_proj", "up_proj", "gate_proj"],
-            lora_rank_ratio: float = 0.1,
-            lora_alpha: float = 16.0,
-            device: Literal["cuda", "cpu"] = "cuda",
-            allocation_aware: Optional[bool] = None,
-            verbose: bool = False,
-            log_file: Optional[str] = None
+            log_file: Optional[str] = None,
+            tokenizer=None,
+            *args, **kwargs
         ):
-        """
-        压缩Transformer块，使用LoRA层替换原始层
-        
-        Args:
-            layer_id: 层索引
-            block_type: 块类型，"attention"或"mlp"
-            target_layer_types: 目标层类型列表
-            lora_rank_ratio: LoRA秩比例
-            lora_alpha: LoRA缩放因子
-            device: 计算设备
-            allocation_aware: 是否感知分配
-            verbose: 是否输出详细信息
-            log_file: 日志文件路径
+            """
+            一次性完成整个模型压缩流程，包括层选择、LoRA替换和恢复训练
             
-        Returns:
-            是否跳过压缩
-        """
-        setup_logger(log_file=log_file)
-        if layer_id is None:
-            raise ValueError("Layer id should be given, but got None")
-        
-        if target_layer_types is None:
-            return True
-
-        if block_type == "attention":
-            default_layer_types = ["q_proj", "k_proj", "v_proj", "o_proj"] # by default
-            if not target_layer_types:
-                target_layer_types = default_layer_types
+            Args:
+                calibration_dataloader: 校准数据加载器
+                layers_id: 要替换的层ID列表
+                num_prune_layers: 如果未指定layers_id，要替换的层数
+                lora_rank_ratio: LoRA秩与隐藏层大小的比例
+                lora_alpha: LoRA alpha参数
+                target_modules: 要替换的目标模块类型
+                device: 计算设备
+                angular: 是否使用角度相似度计算层相似性
+                verbose: 是否输出详细日志
+                recovery: 是否进行恢复训练
+                recovery_epochs: 恢复训练的轮数
+                recovery_lr: 恢复训练的学习率
+                continuous_layers_as_group: 是否将连续层作为一个组处理
+                log_file: 日志文件路径
+                tokenizer: 分词器
+                
+            Returns:
+                压缩结果信息
+            """
+            setup_logger(log_file=log_file)
+            
+            # 1. 计算层重要性并选择要替换的层
+            if layers_id is None:
+                logger.info("=======> 计算层重要性")
+                layers_importance, layers_id = self.compute_bi(
+                    num_prune_layers=num_prune_layers, 
+                    calibration_dataloader=calibration_dataloader, 
+                    angular=angular, 
+                    device=device
+                )
+                logger.info(f"层重要性: {layers_importance}")
+            
+            if isinstance(layers_id, int):
+                layers_id = [layers_id]
+            
+            self.redundant_layers = layers_id
+            logger.info(f"要替换的层: {layers_id}")
+            
+            # 2. 检测连续层组
+            layer_groups = []
+            if continuous_layers_as_group and len(layers_id) > 1:
+                # 先按降序排序
+                layers_id.sort(reverse=True)
+                layer_groups = self.identify_continuous_layers(layers_id)
+                if len(layer_groups) < len(layers_id):
+                    logger.info(f"=======> 检测到连续层组: {layer_groups}")
+            
+            # 3. 替换选定的层为LoRA层
+            logger.info("=======> 开始替换层为LoRA层")
+            replaced_layers = []
+            
+            # 如果有连续层组且启用了连续层组处理
+            if continuous_layers_as_group and layer_groups:
+                # 先移除所有要剪枝的层
+                removed_layers = self.remove_layers(layers_to_remove=layers_id)
+                logger.info(f"已移除层: {removed_layers}")
+                
+                # 对每个连续层组，在组的起始位置添加一个WholeLayerLoRA
+                for group in layer_groups:
+                    # 获取组的起始位置
+                    start_layer = min(group)
+                    logger.info(f"在位置 {start_layer} 添加WholeLayerLoRA替代连续层组 {group}")
+                    
+                    # 添加WholeLayerLoRA
+                    success = self.replace_whole_layer_with_lora(
+                        layer_id=start_layer,
+                        lora_rank_ratio=lora_rank_ratio,
+                        lora_alpha=lora_alpha,
+                        device=device,
+                        log_file=log_file
+                    )
+                    
+                    if success:
+                        replaced_layers.append(f"model.layers.{start_layer}")
             else:
-                is_valid = all(layer in default_layer_types for layer in target_layer_types)
-                if not is_valid:
-                    raise ValueError(f"values in target layer types is not valid, should be one of {default_layer_types}")
-            target_layer_types = ["self_attn." + target_layer_type for target_layer_type in target_layer_types]
-        elif block_type == "mlp":
-            default_layer_types = ["down_proj", "up_proj", "gate_proj"] # by default
-            if not target_layer_types:
-                target_layer_types = default_layer_types
-            else:
-                is_valid = all(layer in default_layer_types for layer in target_layer_types)
-                if not is_valid:
-                    raise ValueError(f"values in target layer types is not valid, should be one of {default_layer_types}")
-            target_layer_types = ["mlp." + target_layer_type for target_layer_type in target_layer_types]
-        else:
-            raise NotImplementedError(f"block type {block_type} not support")
-        
-        base_layer_name = f"model.layers.{layer_id}."
-        target_layer_names = [base_layer_name + target_layer_type for target_layer_type in target_layer_types]
-
-        if allocation_aware:
-            compression_ratio_list = []
-            for target_layer in target_layer_names:
-                module = self.model.get_submodule(target_layer)
-                if isinstance(module, nn.Linear):
-                    compression_ratio = getattr(module, "compression_ratio", None)
-                    if compression_ratio is not None:
-                        if isinstance(compression_ratio, torch.Tensor):
-                            compression_ratio = compression_ratio.cpu().item()
-                    else:
-                        compression_ratio = None
-                    compression_ratio_list.append(compression_ratio)
-                    if compression_ratio == 0:
-                        continue
-                    else:
-                        self.replace_with_LoRALayer(
-                            target_layer=target_layer, 
-                            lora_rank_ratio=lora_rank_ratio, 
-                            lora_alpha=lora_alpha, 
+                # 如果没有连续层组或未启用连续层组处理，按原来的方式处理每一层
+                for layer_id in tqdm(layers_id, desc="替换为LoRA层", total=len(layers_id), leave=True):
+                    # 构建目标层路径
+                    layer_paths = []
+                    for module_name in target_modules:
+                        layer_paths.append(f"model.layers.{layer_id}.self_attn.{module_name}")
+                        layer_paths.append(f"model.layers.{layer_id}.mlp.{module_name}")
+                    
+                    # 替换为LoRA层
+                    for layer_path in layer_paths:
+                        success = self.replace_with_LoRALayer(
+                            target_layer=layer_path,
+                            lora_rank_ratio=lora_rank_ratio,
+                            lora_alpha=lora_alpha,
                             device=device,
                             log_file=log_file
                         )
-            if np.all(np.array(compression_ratio_list) == 0):
-                return True
-        else:
-            for target_layer in target_layer_names:
-                self.replace_with_LoRALayer(
-                    target_layer=target_layer, 
-                    lora_rank_ratio=lora_rank_ratio, 
-                    lora_alpha=lora_alpha, 
-                    device=device,
+                        if success:
+                            replaced_layers.append(layer_path)
+            
+            logger.info(f"成功替换的层: {replaced_layers}")
+            
+            # 4. 如果需要恢复训练，训练LoRA参数
+            if recovery and replaced_layers:
+                logger.info("=======> 开始LoRA参数恢复训练")
+                self.train_lora_compensation(
+                    tokenizer=tokenizer,
+                    recovery_epochs=recovery_epochs,
+                    recovery_lr=recovery_lr,
                     log_file=log_file
                 )
-        return False
+            
+            return {
+                "replaced_layers": replaced_layers,
+                "redundant_layers": self.redundant_layers,
+                "lora_layers_info": self.lora_layers_info
+            }
 
-    def train_lora_layers(
+    def train_lora_compensation(
             self,
-            calibration_dataloader: DataLoader,
-            num_epochs: int = 1,
-            learning_rate: float = 3e-4,
-            device: Literal["cuda", "cpu"] = "cuda",
-            log_file: Optional[str] = None
+            tokenizer=None,
+            data_path: Optional[str] = 'yahma/alpaca-cleaned',
+            output_dir: Optional[str] = './checkpoint',
+            batch_size: int = 32,
+            mirco_batch_size: int = 4,
+            recovery_epochs: int = 1,
+            recovery_lr: float = 3e-4,
+            max_length: int = 256,
+            val_set_size: int = 2000,
+            train_on_inputs: bool = True,
+            add_eos_token: bool = False,
+            resume_from_checkpoint: Optional[str] = None,
+            prompt_template_name: str = "alpaca",
+            train_device: Optional[str] = None,
+            log_file: Optional[str] = None,
+            **kwargs
         ):
-        """
-        训练LoRA层以恢复模型性能
-        
-        Args:
-            calibration_dataloader: 校准数据加载器
-            num_epochs: 训练轮数
-            learning_rate: 学习率
-            device: 计算设备
-            log_file: 日志文件路径
-        """
-        setup_logger(log_file=log_file)
-        logger.info("开始训练LoRA层以恢复模型性能")
-        
-        # 确保模型在正确的设备上
-        self.model.to(device=device)
-        
-        # 设置优化器，只优化可训练参数
-        optimizer = torch.optim.AdamW(
-            [p for p in self.model.parameters() if p.requires_grad],
-            lr=learning_rate
-        )
-        
-        # 训练循环
-        for epoch in range(num_epochs):
-            total_loss = 0.0
-            num_batches = 0
+            """
+            训练LoRA层参数以恢复模型性能
             
-            # 进度条
-            progress_bar = tqdm(calibration_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=True)
+            Args:
+                tokenizer: 分词器
+                data_path: 训练数据路径
+                output_dir: 输出目录
+                batch_size: 批处理大小
+                mirco_batch_size: 微批处理大小
+                recovery_epochs: 训练轮数
+                recovery_lr: 学习率
+                max_length: 最大序列长度
+                val_set_size: 验证集大小
+                train_on_inputs: 是否在输入上训练
+                add_eos_token: 是否添加EOS标记
+                resume_from_checkpoint: 恢复训练的检查点
+                prompt_template_name: 提示模板名称
+                train_device: 训练设备
+                log_file: 日志文件路径
+            """
+            setup_logger(log_file=log_file)
             
-            for batch in progress_bar:
-                # 准备输入
-                if len(batch) == 2:
-                    attention_mask = None
-                else:
-                    attention_mask = batch["attention_mask"].to(device=device)
-                input_ids = batch["input_ids"].to(device=device)
-                labels = batch["labels"].to(device=device)
-                
-                # 前向传播
-                outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    use_cache=False
-                )
-                loss = outputs[0]
-                
-                # 反向传播
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                
-                # 更新统计信息
-                total_loss += loss.item()
-                num_batches += 1
-                
-                # 更新进度条
-                progress_bar.set_postfix({"loss": loss.item()})
-                
-                # 清理缓存
-                if "cuda" in device:
-                    torch.cuda.empty_cache()
+            # 导入train函数
+            from alpaca_grasp import train
             
-            # 打印每个epoch的平均损失
-            avg_loss = total_loss / num_batches
-            logger.info(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.4f}")
-        
-        logger.info("LoRA层训练完成")
-        # 打印可训练参数
-        self.print_trainable_params(log_file=log_file)
-        # 冻结所有参数
-        for param in self.model.parameters():
-            param.requires_grad = False
-        
-        return self
-
+            # 调用train函数进行训练
+            logger.info("=======> 调用alpaca_grasp.train进行LoRA参数恢复训练")
+            trained_model = train(
+                grasp_model=self,
+                tokenizer=tokenizer,
+                data_path=data_path,
+                output_dir=output_dir,
+                batch_size=batch_size,
+                mirco_batch_size=mirco_batch_size,
+                num_epochs=recovery_epochs,
+                learning_rate=recovery_lr,
+                max_length=max_length,
+                val_set_size=val_set_size,
+                train_on_inputs=train_on_inputs,
+                add_eos_token=add_eos_token,
+                resume_from_checkpoint=resume_from_checkpoint,
+                prompt_template_name=prompt_template_name,
+                train_device=train_device,
+                log_file=log_file,
+                **kwargs
+            )
+            
+            # 更新当前模型
+            self.model = trained_model.model
+            
+            return self
+    
     def apply_peft_lora(
             self,
             layers_to_prune: List[int],
@@ -889,33 +792,193 @@ class GRASPLoRAModel(nn.Module):
                 
                 return self.lora_layers_info
 
-    def identify_continuous_layers(self, layers: List[int]) -> List[List[int]]:
+    def identify_continuous_layers(self, layers_id: List[int]) -> List[List[int]]:
         """
         识别连续的层组
         
         Args:
-            layers: 层索引列表
+            layers_id: 层索引列表
             
         Returns:
             连续层组列表
         """
-        if not layers:
+        if not layers_id:
             return []
         
         # 按升序排序
-        sorted_layers = sorted(layers)
+        sorted_layers = sorted(layers_id)
+        
+        # 初始化结果和当前组
         groups = []
         current_group = [sorted_layers[0]]
         
+        # 遍历排序后的层ID
         for i in range(1, len(sorted_layers)):
+            # 如果当前层与前一层连续
             if sorted_layers[i] == sorted_layers[i-1] + 1:
-                # 连续层
                 current_group.append(sorted_layers[i])
             else:
-                # 不连续，开始新组
+                # 如果不连续，保存当前组并开始新组
                 groups.append(current_group)
                 current_group = [sorted_layers[i]]
         
-        # 添加最后一组
+        # 添加最后一个组
         groups.append(current_group)
+        
         return groups
+
+    def apply_lora_compensation(
+            self,
+            calibration_dataloader: DataLoader,
+            device: Literal["cuda", "cpu"] = "cuda",
+            log_file: Optional[str] = None
+        ) -> None:
+        """
+        应用LoRA补偿，调整LoRA层的权重以匹配原始层的行为
+        
+        Args:
+            calibration_dataloader: 校准数据加载器
+            device: 计算设备
+            log_file: 日志文件路径
+        """
+        setup_logger(log_file=log_file)
+        
+        # 检查是否有LoRA层
+        lora_layers = self.check_exists_lora_layer(log_file=log_file)
+        if not lora_layers:
+            logger.warning("没有找到LoRA层，无法应用补偿")
+            return
+        
+        logger.info(f"找到LoRA层: {lora_layers}")
+        
+        # 将模型移至指定设备
+        self.model.to(device=device)
+        
+        # 收集校准数据的隐藏状态
+        hidden_states_dict = {}
+        
+        logger.info("收集校准数据的隐藏状态...")
+        with torch.no_grad():
+            for batch in tqdm(calibration_dataloader, desc="收集隐藏状态", leave=True):
+                # 准备输入
+                if isinstance(batch, dict):
+                    input_ids = batch["input_ids"].to(device=device)
+                    attention_mask = batch["attention_mask"].to(device=device) if "attention_mask" in batch else None
+                else:
+                    input_ids = batch[0].to(device=device)
+                    attention_mask = batch[1].to(device=device) if len(batch) > 1 else None
+                
+                # 前向传播，收集所有层的隐藏状态
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    output_hidden_states=True,
+                    return_dict=True
+                )
+                
+                # 存储隐藏状态
+                for i, hidden_state in enumerate(outputs.hidden_states):
+                    if i not in hidden_states_dict:
+                        hidden_states_dict[i] = []
+                    hidden_states_dict[i].append(hidden_state.detach().cpu())
+        
+        # 对每个LoRA层应用补偿
+        logger.info("应用LoRA补偿...")
+        for layer_name in lora_layers:
+            try:
+                # 解析层索引
+                layer_idx = int(layer_name.split('.')[-2])
+                
+                # 获取该层的模块
+                layer_module = self.model.model.layers[layer_idx]
+                
+                # 检查是否为WholeLayerLoRA
+                if isinstance(layer_module, WholeLayerLoRA):
+                    logger.info(f"为第 {layer_idx} 层的WholeLayerLoRA应用补偿")
+                    
+                    # 获取输入和输出隐藏状态
+                    input_hiddens = torch.cat(hidden_states_dict[layer_idx], dim=0)
+                    output_hiddens = torch.cat(hidden_states_dict[layer_idx + 1], dim=0)
+                    
+                    # 将隐藏状态移至计算设备
+                    input_hiddens = input_hiddens.to(device=device)
+                    output_hiddens = output_hiddens.to(device=device)
+                    
+                    # 计算最佳的LoRA权重
+                    # 使用最小二乘法求解 B·A·X ≈ Y
+                    X = input_hiddens.reshape(-1, input_hiddens.size(-1))
+                    Y = output_hiddens.reshape(-1, output_hiddens.size(-1))
+                    
+                    # 计算A·X
+                    A_X = torch.mm(X, layer_module.lora_A.t())
+                    
+                    # 计算伪逆以求解B
+                    A_X_pinv = torch.pinverse(A_X)
+                    B_optimal = torch.mm(Y, A_X_pinv)
+                    
+                    # 更新LoRA权重
+                    with torch.no_grad():
+                        layer_module.lora_B.copy_(B_optimal)
+                    
+                    logger.info(f"成功为第 {layer_idx} 层应用LoRA补偿")
+                
+            except Exception as e:
+                logger.error(f"为层 {layer_name} 应用补偿时出错: {e}")
+        
+        logger.info("LoRA补偿应用完成")
+
+    def check_exists_lora_layer(self, log_file: Optional[str] = None) -> List[str]:
+        """
+        检查模型中是否存在LoRA层
+        
+        Args:
+            log_file: 日志文件路径
+            
+        Returns:
+            LoRA层名称列表
+        """
+        setup_logger(log_file=log_file)
+        
+        lora_layers = []
+        
+        # 遍历模型的所有模块
+        for name, module in self.model.named_modules():
+            if isinstance(module, (LoRALayer, WholeLayerLoRA)):
+                lora_layers.append(name)
+        
+        if lora_layers:
+            logger.info(f"找到 {len(lora_layers)} 个LoRA层: {lora_layers}")
+        else:
+            logger.warning("未找到任何LoRA层")
+        
+        return lora_layers
+
+    def ensure_only_lora_trainable(self, log_file: Optional[str] = None):
+        """
+        确保只有LoRA层的参数是可训练的
+        
+        Args:
+            log_file: 日志文件路径
+        """
+        setup_logger(log_file=log_file)
+        
+        # 首先冻结所有参数
+        for param in self.model.parameters():
+            param.requires_grad = False
+        
+        # 然后只解冻LoRA层的参数
+        lora_params_count = 0
+        
+        # 遍历所有模块，找到LoRA层并解冻其参数
+        for name, module in self.model.named_modules():
+            if isinstance(module, (LoRALayer, WholeLayerLoRA)):
+                for param_name, param in module.named_parameters():
+                    param.requires_grad = True
+                    lora_params_count += param.numel()
+        
+        logger.info(f"已设置 {lora_params_count} 个LoRA参数为可训练状态")
+        
+        # 打印可训练参数信息
+        self.print_trainable_params(log_file=log_file)
+        
+        return lora_params_count
