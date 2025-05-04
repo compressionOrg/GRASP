@@ -49,6 +49,7 @@ def main(
     train_device: Optional[str] = None,
     use_peft: bool = False,
     continuous_layers_as_group: bool = True,
+    use_svd_init: bool = True,  # 新增参数，控制是否使用SVD初始化
     *args, **kwargs
 ):
     # 设置日志记录器
@@ -80,8 +81,13 @@ def main(
         recovery_lr=recovery_lr,
         continuous_layers_as_group=continuous_layers_as_group,
         log_file=log_file,
-        tokenizer=tokenizer  # 传入tokenizer
+        tokenizer=tokenizer,  # 传入tokenizer
+        use_svd_init=use_svd_init  # 传入是否使用SVD初始化的参数
     )
+    
+    # 确保LoRA参数是可训练的
+    logger.info("=======> 确保LoRA参数是可训练的")
+    grasp_lora_model.ensure_lora_trainable(log_file=log_file)
     
     # 保存模型
     logger.info("=======> 保存模型")
@@ -196,11 +202,13 @@ def parse_args():
                       help="用于校准的样本数量")
     parser.add_argument("--continuous_layers_as_group", action="store_true", default=True,
                       help="是否将连续层作为一个组处理，只使用一个LoRA层")
+    parser.add_argument("--use_svd_init", action="store_true", default=True,
+                      help="是否使用SVD分解结果初始化LoRA权重")
     
     # 评估参数
     parser.add_argument("--evaluate", action="store_true",
                       help="是否在补偿后进行评估")
-    parser.add_argument("--eval_ppl", type=str, default="",
+    parser.add_argument("--eval_ppl", type=str, default="wikitext2,ptb",
                       help="用于评估困惑度的数据集，用逗号分隔，例如：wikitext2,ptb,c4")
     parser.add_argument("--eval_tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa",
                       help="评估任务，用逗号分隔")
@@ -253,6 +261,7 @@ if __name__ == "__main__":
         log_file=args.log_file,
         train_device=args.train_device,
         use_peft=args.use_peft,
+        use_svd_init=args.use_svd_init,  # 添加新参数
         additional_recovery=args.additional_recovery
     )
     logger.info("输出模型结构")
