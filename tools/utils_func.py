@@ -43,16 +43,42 @@ def jaccard_similarity(list1, list2):
 
 
 def adaptive_rank_selection(svd_importance_list, target_ratio):
-    total_sum = sum(svd_importance_list)
+    # 确保输入是张量或列表
+    if isinstance(svd_importance_list, torch.Tensor):
+        svd_importance_list = svd_importance_list.detach().cpu()
+    
+    # 转换为列表，处理可能的NaN值
+    importance_values = []
+    for val in svd_importance_list:
+        if isinstance(val, torch.Tensor):
+            val = val.item()
+        if not (torch.isnan(torch.tensor(val)) if isinstance(val, float) else False):
+            importance_values.append(val)
+        else:
+            importance_values.append(0.0)
+    
+    # 计算总和
+    total_sum = sum(importance_values)
+    if total_sum <= 0:
+        # 如果总和小于等于0，返回前几个索引
+        return [i for i in range(min(10, len(importance_values)))]
+    
     target_sum = total_sum * target_ratio
 
-    sorted_list = sorted(enumerate(svd_importance_list), key=lambda x: -x[1])
+    # 按重要性排序
+    sorted_list = sorted(enumerate(importance_values), key=lambda x: -x[1])
 
     cumulative_sum = 0
     indices = []
     for index, value in sorted_list:
-        cumulative_sum += value
-        indices.append(index)
-        if cumulative_sum >= target_sum:
-            break
+        if value > 0:  # 只考虑正值
+            cumulative_sum += value
+            indices.append(index)
+            if cumulative_sum >= target_sum:
+                break
+    
+    # 确保至少选择一个元素
+    if not indices and len(importance_values) > 0:
+        indices = [sorted_list[0][0]]
+        
     return indices

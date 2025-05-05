@@ -5,7 +5,7 @@ import numpy as np
 from setproctitle import setproctitle
 from tqdm import tqdm
 from torch.utils.data import DataLoader
-from typing import Union, Literal, Optional, List
+from typing import Union, Literal, Optional, List, Tuple
 import logging
 from modeling_grasp import GRASPModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -45,6 +45,8 @@ def main(
     recovery: Optional[bool] = True,
     log_file: Optional[str] = None,
     train_device: Optional[str] = None,
+    decomposition: Literal["svd", "tucker"] = "tucker",
+    tucker_ranks: Optional[Tuple[int, int]] = None,
     *args, **kwargs
 ):
     # Setup logger
@@ -73,7 +75,7 @@ def main(
 
     # sort layer_id in a descending order
     layers_id.sort(reverse=True)
-    logger.info("=======> Start Compressing model with GRASP")
+    logger.info(f"=======> Start Compressing model with GRASP using {decomposition} decomposition")
     if threshold_ratio is not None:
         logger.info("=======> Adaptive rank selection by taylor threshold %s", threshold_ratio)
     for layer_id in tqdm(layers_id, desc="GRASP Compressing", total=len(layers_id), leave=True):
@@ -85,19 +87,33 @@ def main(
             verbose=verbose, 
             device=device,
             allocation_aware=allocation_aware,
-            log_file=log_file
-        ) # replace original linear layer with svd layer
+            log_file=log_file,
+            decomposition=decomposition,
+            tucker_ranks=tucker_ranks
+        ) # replace original linear layer with decomposed layer
         if not skip_flag:
-            grasp_layer_grads = grasp_model.get_svdlayer_gradients(calibration_dataloader, device, log_file) # calculate gradients for each singular values 
-            indices_dict = grasp_model.dynamic_svd_selection(
-                grasp_layer_grads,
-                metric=metric, 
-                compression_ratio=compression_ratio,
-                threshold_ratio=threshold_ratio,
-                verbose=verbose,
-                log_file=log_file
-            ) # gradient based or taylor based attribution
-            grasp_model.compile_grasp_model(indices_dict, merge=merge, device=device, log_file=log_file) # retain important singular values and compile grasp model
+            if decomposition == "svd":
+                grasp_layer_grads = grasp_model.get_svdlayer_gradients(calibration_dataloader, device, log_file)
+                indices_dict = grasp_model.dynamic_svd_selection(
+                    grasp_layer_grads,
+                    metric=metric, 
+                    compression_ratio=compression_ratio,
+                    threshold_ratio=threshold_ratio,
+                    verbose=verbose,
+                    log_file=log_file
+                )
+                grasp_model.compile_grasp_model(indices_dict, merge=merge, device=device, log_file=log_file)
+            else:  # tucker
+                grasp_layer_grads = grasp_model.get_tucker_layer_gradients(calibration_dataloader, device, log_file)
+                indices_dict = grasp_model.dynamic_tucker_selection(
+                    grasp_layer_grads,
+                    metric=metric, 
+                    compression_ratio=compression_ratio,
+                    threshold_ratio=threshold_ratio,
+                    verbose=verbose,
+                    log_file=log_file
+                )
+                grasp_model.compile_tucker_model(indices_dict, merge=merge, device=device, log_file=log_file)
         else:
             logger.info("=======> Skip Compressing This Block")
 
@@ -109,19 +125,33 @@ def main(
             verbose=verbose, 
             device=device,
             allocation_aware=allocation_aware,
-            log_file=log_file
-        ) # replace original linear layer with svd layer
+            log_file=log_file,
+            decomposition=decomposition,
+            tucker_ranks=tucker_ranks
+        ) # replace original linear layer with decomposed layer
         if not skip_flag:
-            grasp_layer_grads = grasp_model.get_svdlayer_gradients(calibration_dataloader, device, log_file) # calculate gradients for each singular values 
-            indices_dict = grasp_model.dynamic_svd_selection(
-                grasp_layer_grads,
-                metric=metric, 
-                compression_ratio=compression_ratio,
-                threshold_ratio=threshold_ratio,
-                verbose=verbose,
-                log_file=log_file
-            ) # gradient based or taylor based attribution
-            grasp_model.compile_grasp_model(indices_dict, merge=merge, device=device, log_file=log_file) # retain important singular values and compile grasp model
+            if decomposition == "svd":
+                grasp_layer_grads = grasp_model.get_svdlayer_gradients(calibration_dataloader, device, log_file)
+                indices_dict = grasp_model.dynamic_svd_selection(
+                    grasp_layer_grads,
+                    metric=metric, 
+                    compression_ratio=compression_ratio,
+                    threshold_ratio=threshold_ratio,
+                    verbose=verbose,
+                    log_file=log_file
+                )
+                grasp_model.compile_grasp_model(indices_dict, merge=merge, device=device, log_file=log_file)
+            else:  # tucker
+                grasp_layer_grads = grasp_model.get_tucker_layer_gradients(calibration_dataloader, device, log_file)
+                indices_dict = grasp_model.dynamic_tucker_selection(
+                    grasp_layer_grads,
+                    metric=metric, 
+                    compression_ratio=compression_ratio,
+                    threshold_ratio=threshold_ratio,
+                    verbose=verbose,
+                    log_file=log_file
+                )
+                grasp_model.compile_tucker_model(indices_dict, merge=merge, device=device, log_file=log_file)
         else:
             logger.info("=======> Skip Compressing This Block")
     
@@ -203,6 +233,14 @@ def parse_args():
     parser.add_argument("--log_file", type=str, default=None,
                       help="Path to log file for saving program output")
     
+    # 添加Tucker分解相关参数
+    parser.add_argument("--decomposition", type=str, choices=["svd", "tucker"], default="tucker",
+                      help="分解方法: svd或tucker")
+    parser.add_argument("--tucker_rank_out", type=int, default=None,
+                      help="Tucker分解输出维度的秩")
+    parser.add_argument("--tucker_rank_in", type=int, default=None,
+                      help="Tucker分解输入维度的秩")
+    
     # Training arguments for recovery
     parser.add_argument("--data_path", type=str, default='yahma/alpaca-cleaned',
                       help="Path to training data")
@@ -228,7 +266,6 @@ def parse_args():
                       help="Name of prompt template to use")
     parser.add_argument("--train_device", type=str, default="0",
                       help="Device to train on")
-    
     # evaluation arguments
     parser.add_argument("--evaluate", action="store_true",
                       help="Enable evaluation")
@@ -277,6 +314,11 @@ if __name__ == "__main__":
             "resume_from_checkpoint": args.resume_from_checkpoint,
             "prompt_template_name": args.prompt_template_name
         }
+    
+    # 处理Tucker分解的秩参数
+    tucker_ranks = None
+    if args.tucker_rank_out is not None and args.tucker_rank_in is not None:
+        tucker_ranks = (args.tucker_rank_out, args.tucker_rank_in)
     
     # Run main compression function
     grasp_model = main(
