@@ -1,12 +1,12 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1,2
 # Set default values
-MODEL_NAME_OR_PATH="meta-llama/Llama-2-7b-hf"
+MODEL_NAME_OR_PATH="pruned_laco"
 # MODEL_PATH="checkpoint/${MODEL_NAME_OR_PATH//\//-}.pth"
 LOG_DIR="logs"
-TASKS="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,mathqa" # mathqa
+TASKS="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,mathqa"
 EVAL_PPL="wikitext2,ptb"
-BATCH_SIZE=1
+BATCH_SIZE=8
 DEVICE="cuda:0"
 HF=true
 
@@ -15,7 +15,7 @@ mkdir -p $LOG_DIR
 
 # Generate timestamp for log file
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_FILE="$LOG_DIR/evaluation_llama2_7b_dense${TIMESTAMP}.log"
+LOG_FILE="$LOG_DIR/evaluation_${TIMESTAMP}.log"
 
 # Run evaluation
 python evaluate.py \
@@ -26,5 +26,5 @@ python evaluate.py \
     --device $DEVICE \
     --log_file $LOG_FILE \
     $([ "$HF" = "true" ] && echo "--hf")
-
+    # --model_path $MODEL_PATH \
 echo "Evaluation completed. Log file saved to: $LOG_FILE"

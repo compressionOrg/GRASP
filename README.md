@@ -47,42 +47,40 @@ pip install torch==2.3.1+cu118 --index-url https://download.pytorch.org/whl/cu11
 pip install -r requirements.txt
 ```
 
-### ✂️GRASP Compress
+### Laco
 
-1. 🔧 **Adjust the parameters in `scripts/params_script.sh` to fit your needs.**
-   - **MODEL_NAME_OR_PATH**: Specifies the path or name of the pre-trained model to be used.
-   - **DATASET_NAME**: Indicates the name of the dataset to be used for calibration.
-   - **NUM_PRUNE_LAYERS**: Defines the number of redundant layers to be pruned from the model.
-   - **COMPRESSION_RATIO**: Sets the target compression ratio for the redundant layers.
-   - **NUM_SAMPLES**: Specifies the number of samples to be used for calibration.
-
-2. ▶️**Run the GRASP Scripts:**
-
-   ```bash
-   bash scripts/run_grasp.sh
-   ```
-
-
-
-## 📐Evaluation
-
-**To evaluate the model, use the following script:**
-
-```bash
-bash scripts/run_evaluate.sh
-```
-
-
-
-## 📌Citation
-
-**If you find the repository or paper helpful, please cite our work:**
+Laco pruning 
 
 ```
-@article{liu2024rethinking,
-  title={Rethinking Layer Removal: Preserving Critical Components with Task-Aware Singular Value Decomposition},
-  author={Liu, Kainan and Zhang, Yong and Cheng, Ning and Li, Zhitao and Wang, Shaojun and Xiao, Jing},
-  journal={arXiv preprint arXiv:2501.00339},
-  year={2024}
-}
+/bin/bash  scripts/run_laco.sh
+```
+
+```
+python laco.py \
+    --model_name_or_path ${MODEL_NAME_OR_PATH} \
+    --merge_layers ${NUM_PRUNE_LAYERS} \
+    --threshold ${THRESHOLD} \
+    --highest_lay ${HIGHTEST_LAY} \
+    --lowest_lay ${LOWEST_LAY} \
+    --evaluate \
+    --tasks $TASKS \
+    --eval_ppl $EVAL_PPL \
+    --log_file $LOG_FILE \
+```
+
+evaluate zero-shot and PPL
+
+```
+/bin/bash  scripts/eval_laco_llama2_7b.sh
+```
+
+```
+python evaluate.py \
+    --model_path $MODEL_PATH \
+    --model_name_or_path $MODEL_NAME_OR_PATH \
+    --tasks $TASKS \
+    --eval_ppl $EVAL_PPL \
+    --batch_size $BATCH_SIZE \
+    --device $DEVICE \
+    --log_file $LOG_FILE \
 ```

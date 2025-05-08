@@ -22,3 +22,5 @@ __pycache__/
 *.pywz
 
 logs/
+*.safetensors
+*.model
