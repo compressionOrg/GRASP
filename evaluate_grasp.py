@@ -157,13 +157,14 @@ def evaluate_model(
     if eval_ppl:
         for dataset in eval_ppl.split(","):
             logger.info("load dataset %s", dataset)
-            cache_testloader = f"cache/{dataset}_testloader_{model_name.replace('/', '_')}_all.cache"
-            if os.path.exists(cache_testloader):
-                testloader = torch.load(cache_testloader, weights_only=False)
-                logger.info("load benchmark from %s", cache_testloader)
-            else:
-                testloader = get_evaluation_dataloader(dataset, tokenizer)
-                torch.save(testloader, cache_testloader)
+            # cache_testloader = f"cache/{dataset}_testloader_{model_name.replace('/', '_')}_all.cache"
+            # if os.path.exists(cache_testloader):
+            #     testloader = torch.load(cache_testloader, weights_only=False)
+            #     logger.info("load benchmark from %s", cache_testloader)
+            # else:
+                # testloader = get_evaluation_dataloader(dataset, tokenizer)
+                # torch.save(testloader, cache_testloader)
+            testloader = get_evaluation_dataloader(dataset, tokenizer)
             testenc = testloader.input_ids
             nsamples = testenc.numel() // lm.seqlen
             if is_peft_model:

@@ -234,7 +234,7 @@ def parse_args():
                       help="Enable evaluation")
     parser.add_argument("--eval_ppl", type=str, default="wikitext2,ptb,c4",
                       help="Datasets to evaluate on")
-    parser.add_argument("--eval_tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa",
+    parser.add_argument("--eval_tasks", type=str, default="boolq,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,mathqa",
                       help="Tasks to evaluate on")
     parser.add_argument("--num_fewshot", type=int, default=0,
                       help="Number of few-shot examples")
